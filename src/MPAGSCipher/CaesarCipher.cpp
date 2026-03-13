@@ -1,8 +1,10 @@
 #include "CaesarCipher.hpp"
 #include "Alphabet.hpp"
 
+#include <chrono>
+#include <future>
+#include <iostream>
 #include <string>
-
 /**
  * \file CaesarCipher.cpp
  * \brief Contains the implementation of the CaesarCipher class
@@ -44,34 +46,64 @@ std::string CaesarCipher::applyCipher(const std::string& inputText,
 {
     // Create the output string
     std::string outputText;
+    outputText.reserve(inputText.size());
 
-    // Loop over the input text
-    char processedChar{'x'};
-    for (const auto& origChar : inputText) {
-        // For each character in the input text, find the corresponding position in
-        // the alphabet by using an indexed loop over the alphabet container
-        for (std::size_t i{0}; i < Alphabet::size; ++i) {
-            if (origChar == Alphabet::alphabet[i]) {
-                // Apply the appropriate shift (depending on whether we're encrypting
-                // or decrypting) and determine the new character
-                // Can then break out of the loop over the alphabet
-                switch (cipherMode) {
-                    case CipherMode::Encrypt:
-                        processedChar =
-                            Alphabet::alphabet[(i + key_) % Alphabet::size];
-                        break;
-                    case CipherMode::Decrypt:
-                        processedChar =
-                            Alphabet::alphabet[(i + Alphabet::size - key_) %
-                                               Alphabet::size];
-                        break;
+    constexpr int NTHREADS{8};
+    std::vector<std::future<std::string>> futures;
+    auto processChunk = [this, cipherMode](const std::string& chunk) {
+        std::string outputChunk;
+        outputChunk.reserve(chunk.size());
+
+        // Loop over the input text
+        char processedChar{'x'};
+        for (const auto& origChar : chunk) {
+            // For each character in the input text, find the corresponding position in
+            // the alphabet by using an indexed loop over the alphabet container
+            for (std::size_t i{0}; i < Alphabet::size; ++i) {
+                if (origChar == Alphabet::alphabet[i]) {
+                    // Apply the appropriate shift (depending on whether we're encrypting
+                    // or decrypting) and determine the new character
+                    // Can then break out of the loop over the alphabet
+                    switch (cipherMode) {
+                        case CipherMode::Encrypt:
+                            processedChar =
+                                Alphabet::alphabet[(i + key_) % Alphabet::size];
+                            break;
+                        case CipherMode::Decrypt:
+                            processedChar =
+                                Alphabet::alphabet[(i + Alphabet::size - key_) %
+                                                   Alphabet::size];
+                            break;
+                    }
+                    break;
                 }
-                break;
             }
+
+            // Add the new character to the output text
+            outputChunk += processedChar;
         }
 
-        // Add the new character to the output text
-        outputText += processedChar;
+        return outputChunk;
+    };
+
+    std::size_t chunkSize = inputText.size() / NTHREADS;
+    for (std::size_t i{0}; i < NTHREADS; ++i) {
+        std::size_t start = i * chunkSize;
+        std::size_t end =
+            (i == NTHREADS - 1) ? inputText.size() : (i + 1) * chunkSize;
+        futures.push_back(std::async(std::launch::async, processChunk,
+                                     inputText.substr(start, end - start)));
+    }
+
+    for (auto& future : futures) {
+        std::future_status status{std::future_status::ready};
+        do {
+            constexpr int WAIT_MILISECONDS{100};
+            status =
+                future.wait_for(std::chrono::milliseconds(WAIT_MILISECONDS));
+        } while (status != std::future_status::ready);
+
+        outputText += future.get();
     }
 
     return outputText;
